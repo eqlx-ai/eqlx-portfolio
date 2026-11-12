@@ -1,0 +1,63 @@
+[project]
+name = "eqlx-portfolio"
+version = "0.1.0"
+description = "Deterministic credit portfolio risk: loss distribution, value-at-risk, expected shortfall, economic capital and risk contributions, by seeded simulation and by CreditRisk+. Checked against published examples. Read-only MCP server for AI agents."
+readme = "README.md"
+authors = [
+    { name = "Can Demir", email = "can.demir@eqlx.ai" }
+]
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+keywords = ["credit risk", "credit portfolio", "economic capital", "value at risk", "expected shortfall", "creditmetrics", "creditrisk+", "concentration risk", "risk contributions", "mcp"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Topic :: Office/Business :: Financial",
+]
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+]
+
+[project.optional-dependencies]
+mcp = [
+    "mcp>=2.3.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.16,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "mypy>=2.4.1",
+    "pytest>=9.2.0",
+    "ruff>=0.17.4",
+]
+
+[project.scripts]
+eqlx-portfolio = "eqlx_portfolio.cli:main"
+
+[project.urls]
+Homepage = "https://eqlx.org"
+Source = "https://github.com/eqlx-ai/eqlx-portfolio"
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "N", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501"]
+
+[tool.mypy]
+strict = true
+
+[[tool.mypy.overrides]]
+module = ["mcp.*", "scipy.*"]
+ignore_missing_imports = true
