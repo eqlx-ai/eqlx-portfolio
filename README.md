@@ -1,8 +1,8 @@
 # eqlx-portfolio
 
 Deterministic credit portfolio risk: how much a loan book can lose in a bad year, how much capital
-that takes, and which borrowers and sectors drive it. A Python library, a command line tool and a
-read-only MCP server for AI agents.
+that takes, and which borrowers and sectors drive it. And what a new loan has to earn to be worth
+that capital. A Python library, a command line tool and a read-only MCP server for AI agents.
 
 Loans are assessed one by one, but they fail together: a hundred loans to a hundred industries and a
 hundred loans to one industry look the same loan by loan and are very different portfolios. This
@@ -42,7 +42,7 @@ eqlx-portfolio run demo/loans.csv --config demo/settings.json
 ```
 
 ```text
-eqlx-portfolio 0.1.0  method: simulation
+eqlx-portfolio 0.2.0  method: simulation
 loans 621  borrowers 500  sectors 6  exposure 995,349,000
 
 expected loss                12,716,172
@@ -97,6 +97,25 @@ eqlx-portfolio what-if demo/loans.csv --config demo/settings.json --new new_loan
 
 Same loan, same expected loss, twice the capital: it lands where the book is already heavy. Both
 portfolios are valued on the same scenarios, so the difference is not simulation noise.
+
+What does that loan have to earn? Say it runs three years with quarterly interest, funding costs
+40%, the bank wants 45% on its capital after 30% tax, the capital itself earns 38%, operating costs
+are 1%, and 43% is on offer:
+
+```bash
+eqlx-portfolio price demo/loans.csv --config demo/settings.json --new new_loan.csv --terms terms.json
+```
+
+| The same loan, offered at 43% | Capital tied up | Hurdle rate | RAROC | Earns the target? |
+|---|---|---|---|---|
+| to construction, capital from this book | 16.2% | 43.76% | 41.7% | no |
+| to energy, capital from this book | 6.7% | 42.82% | 46.9% | yes |
+| either, capital from the Basel formula | 7.7% | 42.91% | 45.8% | yes |
+| either, capital from a 100% risk weight at 12% | 12.0% | 43.34% | 43.0% | no |
+
+The hurdle rate is funding cost (40.00%) + expected loss (1.11%) + operating cost (1.03%) + the cost
+of the capital tied up. Only the last part differs, and only the book itself can tell the two
+borrowers apart: a formula or a risk weight prices them the same.
 
 Other commands: `contributions` (every borrower's share of the risk, as CSV), `describe` (what a
 loan file contains), `pair` (joint default probability of two borrowers).
@@ -167,6 +186,8 @@ Client configuration (Claude Desktop, Claude Code and other MCP clients):
 | `portfolio_risk` | expected loss, value-at-risk, expected shortfall, economic capital, concentration, steps |
 | `risk_contributions` | borrowers ranked by their share of the risk, next to their share of exposure |
 | `what_if_new_loans` | the portfolio before and after new loans, on the same scenarios |
+| `price_new_loan` | hurdle rate and RAROC of a new loan, with capital measured from the book, the Basel formula and a risk weight |
+| `loan_price` | cost components, hurdle rate and RAROC when the capital is already known |
 | `joint_default` | probability that two borrowers default together |
 | `joint_migration` | joint year-end rating probabilities of two borrowers |
 | `exposure_value` | mean and standard deviation of one exposure's value |
@@ -261,14 +282,17 @@ Independent truth for everything else:
 - risk contributions add up to the expected shortfall, in both methods;
 - a what-if run reproduces, to the last digit, the separate run of the portfolio without the new
   loans, also when the new loan brings a new sector or an uncertain loss given default;
+- loan pricing against the closed form of the scheme it follows (Engelmann and Pham 2020, eq. 28),
+  a one-year loan worked by hand, and the identity that RAROC at the hurdle rate is the target;
 - every defect found by an independent review is pinned by a regression test.
 
-145 tests. `uv run pytest` runs them in about a minute.
+188 tests. `uv run pytest` runs them in two to three minutes.
 
 ## Limits
 
 One period, default mode in portfolio runs, inputs are yours, the far tail of a simulation is thin,
-CreditRisk+ sectors are independent. No estimation of correlations, no granularity adjustment, no
+CreditRisk+ sectors are independent. The hurdle rate is a break-even point, not a recommended price,
+and loan pricing is verified by formula, not by published tables. No estimation of correlations, no granularity adjustment, no
 stress scenarios, not regulatory capital. Details in [LIMITS.md](LIMITS.md).
 
 ## References
@@ -279,6 +303,10 @@ stress scenarios, not regulatory capital. Details in [LIMITS.md](LIMITS.md).
 - Gordy, M. B. (2000). A comparative anatomy of credit risk models. *Journal of Banking & Finance* 24.
 - Gordy, M. B. (2003). A risk-factor model foundation for ratings-based bank capital rules.
   *Journal of Financial Intermediation* 12.
+- Engelmann, B., Pham, H. (2020). A RAROC valuation scheme for loans and its application in loan
+  origination. *Risks* 8(2), 63.
+- European Banking Authority (2020). *Guidelines on loan origination and monitoring*
+  (EBA/GL/2020/06), section 6.
 - Haaf, H., Tasche, D. (2002). Calculating value-at-risk contributions in CreditRisk+. *GARP Risk Review* 7.
 - Haaf, H., Reiss, O., Schoenmakers, J. (2004). Numerically stable computation of CreditRisk+.
   In *CreditRisk+ in the Banking Industry*, Springer.

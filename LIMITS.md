@@ -54,12 +54,33 @@ What the tool does not do, and where its numbers need care.
   probabilities and default correlation the two agree on expected loss and are close on the standard
   deviation, and drift apart in the far tail (gamma versus normal factors).
 
+## Loan pricing
+
+- **A break-even point, not a price.** The hurdle rate is where the loan earns the target return on
+  the inputs you gave. Funding cost, operating cost, target return and tax are yours; competition and
+  the customer relationship are not in it.
+- Fixed-rate loans paid out in one tranche, repaid at the end or in equal parts. No floating rates,
+  no annuity schedules, no prepayment, no commitment fees, no swap or basis-swap curves: the funding
+  curve is an input, quoted like the loan's own rate.
+- The default probability does not depend on the interest rate charged.
+- Capital is measured over one year and held at the same share of the amount lent for the loan's life.
+- The portfolio view of capital is the rise in expected shortfall beyond the loan's own expected
+  loss. With simulation it carries simulation noise: a small loan can show a different figure with
+  another seed, and a loan too small to measure is reported as not priced on that basis.
+- Taxes the borrower pays on interest (in Türkiye, KKDF and BSMV) are the borrower's cost, not part
+  of this calculation.
+- **Verification is by formula, not by published tables.** The scheme's closed form (Engelmann and
+  Pham 2020, eq. 28) and hand-worked cases match to rounding error. The article's numerical example
+  needs a discount curve built from swap quotes, which this tool does not rebuild; with a flat curve
+  its margins come out within 0.04 percentage points and RAROC within 0.4 points. That is a
+  plausibility check, not a match.
+
 ## Not included
 
 - Estimation of correlations or sector volatilities from data.
 - Granularity adjustment, stress scenarios, multi-period migration, mark-to-market of loans from a
   loan file, derivative exposure, commitments and drawdown behaviour.
-- Regulatory capital. The large-portfolio benchmark is the formula behind the Basel risk weights
+- Regulatory capital. The large-portfolio benchmark (also used as one capital view in pricing) is the formula behind the Basel risk weights
   without the maturity adjustment and the supervisory parameters; it is a yardstick, not a filing.
 - Any statement about a real bank, borrower or portfolio. The sample portfolio is made up.
 

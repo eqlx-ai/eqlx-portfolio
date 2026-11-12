@@ -22,7 +22,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
-from . import config, data, engine, ratings, valuation, vasicek
+from . import config, data, engine, pricing, ratings, valuation, vasicek
 from ._version import __version__
 from .errors import InputError
 
@@ -130,8 +130,9 @@ def build_server(root: Path, max_rows: int = data.MAX_ROWS) -> MCPServer:
             "paths are relative to it. A run needs a loan file (CSV: loan_id, exposure, pd, lgd, optional "
             "borrower_id, sector, lgd_sd) and a settings file (JSON) whose correlation block is the main "
             "assumption. Start with `list_files` and `describe_loans`, then `portfolio_risk`; use "
-            "`risk_contributions` to see who drives the risk and `what_if_new_loans` to test a new loan. "
-            "`joint_default`, `joint_migration`, `exposure_value` and `large_portfolio_benchmark` are calculators "
+            "`risk_contributions` to see who drives the risk, `what_if_new_loans` to test a new loan and "
+            "`price_new_loan` for what that loan has to earn. `loan_price`, `joint_default`, `joint_migration`, "
+            "`exposure_value` and `large_portfolio_benchmark` are calculators "
             "that need no file. Everything is deterministic: a simulation uses a fixed seed, so the same input "
             "gives the same numbers. The tool does not estimate pd, lgd or correlations. Quote the numbers the "
             "tools return, say which settings produced them, and for simulated value-at-risk mention the band."
@@ -217,6 +218,68 @@ def build_server(root: Path, max_rows: int = data.MAX_ROWS) -> MCPServer:
         _, lo = runs.get_loans(loans)
         raw = runs.settings(settings, overrides)
         return engine.what_if(lo, data.from_records(new_loans), config.from_dict(raw))
+
+    @server.tool(annotations=READ_ONLY)
+    @_explained
+    def price_new_loan(
+        loans: str,
+        settings: str,
+        new_loan: dict[str, Any],
+        terms: dict[str, Any],
+        overrides: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """What one new loan has to earn in this book: cost components, hurdle rate (the break-even
+        interest rate) and, if `terms` has a `rate`, RAROC and the yearly value added. The capital the
+        loan ties up is measured three ways and priced for each: from this portfolio (it costs more
+        where the book is already heavy), from the formula behind the Basel risk weights, and from a
+        fixed risk weight if given.
+
+        `new_loan` is {"loan_id", "exposure", "pd", "lgd"} with optional "sector". `terms` needs "years",
+        "funding" (a yearly rate, or [[years, rate], ...]) and "target_return"; optional
+        "operating_cost", "capital_return", "tax_rate", "payments_per_year" (1, 2, 4, 12), "repayment"
+        ("bullet" or "equal_principal"), "rate", "pd_cumulative", and "risk_weight" with "capital_ratio".
+        Rates are yearly decimals (0.25 is 25%). The tool does not recommend a price."""
+        if not isinstance(new_loan, dict):
+            raise InputError("new_loan must be one loan")
+        _, lo = runs.get_loans(loans)
+        raw = runs.settings(settings, overrides)
+        return engine.price_new_loan(lo, data.from_records([new_loan]), config.from_dict(raw), terms)
+
+    @server.tool(annotations=READ_ONLY)
+    @_explained
+    def loan_price(
+        notional: float,
+        years: float,
+        pd: float,
+        lgd: float,
+        capital: float,
+        target_return: float,
+        funding: float,
+        operating_cost: float = 0.0,
+        capital_return: float = 0.0,
+        tax_rate: float = 0.0,
+        payments_per_year: int = 1,
+        repayment: str = "bullet",
+        rate: float | None = None,
+    ) -> dict[str, Any]:
+        """Cost components, hurdle rate and RAROC of one fixed-rate loan when you already know the capital
+        it ties up (`capital`, per unit lent: 0.08 is 8%). No file needed. Rates are yearly decimals.
+        Hurdle rate = funding cost + expected loss margin + operating cost margin + capital margin."""
+        return pricing.price_loan(
+            notional=notional,
+            years=years,
+            pd=pd,
+            lgd=lgd,
+            capital=capital,
+            target_return=target_return,
+            funding=funding,
+            operating_cost=operating_cost,
+            capital_return=capital_return,
+            tax_rate=tax_rate,
+            payments_per_year=payments_per_year,
+            repayment=repayment,
+            rate=rate,
+        ).to_dict()
 
     @server.tool(annotations=READ_ONLY)
     @_explained

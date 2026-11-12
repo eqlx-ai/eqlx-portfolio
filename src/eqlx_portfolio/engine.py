@@ -12,7 +12,7 @@ from typing import Any
 
 import numpy as np
 
-from . import config, crplus, data, factors, ratings, simulation, vasicek
+from . import config, crplus, data, factors, pricing, ratings, simulation, vasicek
 from ._checks import Array
 from ._version import __version__
 from .errors import InputError
@@ -435,6 +435,135 @@ def what_if(loans: data.Loans, new_loans: data.Loans, settings: config.Settings)
             *CONVENTIONS,
             "capital_per_unit_of_new_exposure is the change in expected shortfall at the highest confidence level "
             "divided by the new exposure.",
+        ],
+    }
+
+
+_TERMS = {
+    "years",
+    "funding",
+    "target_return",
+    "operating_cost",
+    "capital_return",
+    "tax_rate",
+    "payments_per_year",
+    "repayment",
+    "rate",
+    "risk_weight",
+    "capital_ratio",
+    "pd_cumulative",
+}
+
+
+def price_new_loan(loans: data.Loans, new_loan: data.Loans, settings: config.Settings, terms: Any) -> dict[str, Any]:
+    """What one new loan has to earn, with the capital it ties up measured three ways.
+
+    ``terms`` holds the loan's life and the bank's costs: ``years``, ``funding`` (a rate or a list of
+    [years, rate] points), ``target_return``, and optionally ``operating_cost``, ``capital_return``,
+    ``tax_rate``, ``payments_per_year``, ``repayment``, the offered ``rate``, ``pd_cumulative`` and,
+    for the regulatory view, ``risk_weight`` with ``capital_ratio``.
+
+    Capital per unit lent is taken from (1) this portfolio: the rise in expected shortfall at the
+    highest confidence level beyond the loan's own expected loss, (2) the one-factor formula
+    behind the Basel risk weights, and (3) a fixed risk weight if one is given. Each gives its own
+    hurdle rate; the gap between them is what the book's concentration is worth.
+    """
+    if not isinstance(terms, dict):
+        raise InputError("terms must be an object")
+    extra = sorted(set(terms) - _TERMS)
+    if extra:
+        raise InputError(f"unknown term(s): {', '.join(extra)}")
+    missing = [k for k in ("years", "funding", "target_return") if k not in terms]
+    if missing:
+        raise InputError(f"terms need: {', '.join(missing)}")
+    if ("risk_weight" in terms) != ("capital_ratio" in terms):
+        raise InputError("risk_weight and capital_ratio go together")
+    if len(new_loan) != 1:
+        raise InputError("price one new loan at a time")
+    w = what_if(loans, new_loan, settings)
+    exposure = float(new_loan.exposure[0])
+    pd, lgd = float(new_loan.pd[0]), float(new_loan.lgd[0])
+    if pd <= 0.0 or lgd <= 0.0:
+        raise InputError("the new loan needs a positive pd and lgd to be priced")
+    top = w["levels"][-1]
+    own_el = w["new_loans"]["expected_loss"]
+    portfolio_capital = (top["expected_shortfall_change"] - own_el) / exposure
+    common = {
+        "notional": exposure,
+        "years": terms["years"],
+        "pd": terms.get("pd_cumulative", pd),
+        "lgd": lgd,
+        "target_return": terms["target_return"],
+        "funding": terms["funding"],
+        "operating_cost": terms.get("operating_cost", 0.0),
+        "capital_return": terms.get("capital_return", 0.0),
+        "tax_rate": terms.get("tax_rate", 0.0),
+        "payments_per_year": terms.get("payments_per_year", 1),
+        "repayment": terms.get("repayment", "bullet"),
+        "rate": terms.get("rate"),
+    }
+    bases: list[tuple[str, float, str]] = [
+        (
+            "portfolio",
+            portfolio_capital,
+            f"rise in this book's expected shortfall at {top['confidence'] * 100:g}% beyond the loan's expected loss",
+        ),
+        (
+            "basel_formula",
+            pricing.capital_from_basel_formula(pd, lgd),
+            "one-factor formula behind the Basel risk weights at 99.9%, no maturity adjustment",
+        ),
+    ]
+    if "risk_weight" in terms:
+        bases.append(
+            (
+                "risk_weight",
+                pricing.capital_from_risk_weight(terms["risk_weight"], terms["capital_ratio"]),
+                "fixed risk weight times the capital ratio held",
+            )
+        )
+    views = []
+    for name, capital, meaning in bases:
+        if capital <= 0.0:
+            views.append(
+                {
+                    "capital_basis": name,
+                    "meaning": meaning,
+                    "capital_per_unit_lent": capital,
+                    "not_priced": "this basis shows no capital need for the loan; with simulation, the loan may "
+                    "be too small to measure: raise scenarios or use another basis",
+                }
+            )
+            continue
+        views.append(
+            {"capital_basis": name, "meaning": meaning, **pricing.price_loan(capital=capital, **common).to_dict()}
+        )
+    return {
+        "tool": {"name": "eqlx-portfolio", "version": __version__, "numpy": np.__version__},
+        "loan": {
+            "loan_id": new_loan.loan_id[0],
+            "sector": new_loan.sector[0],
+            "exposure": exposure,
+            "pd": pd,
+            "lgd": lgd,
+            "expected_loss_first_year": own_el,
+        },
+        "terms": dict(terms),
+        "portfolio_effect": {
+            "confidence": top["confidence"],
+            "expected_shortfall_change": top["expected_shortfall_change"],
+            "economic_capital_change": top["economic_capital_change"],
+        },
+        "views": views,
+        "settings": settings.to_dict(),
+        "conventions": [
+            "All rates are yearly decimals. The hurdle rate is the interest rate at which RAROC equals the target "
+            "return: funding cost + expected loss margin + operating cost margin + capital margin.",
+            "RAROC = (1 - tax rate) x (rate - funding cost - expected loss margin - operating cost margin) "
+            "/ capital per unit lent + what the capital earns where it is invested.",
+            "Capital is measured over one year and held at the same share of the amount lent for the life of the loan.",
+            "Costs, target return, pd and lgd are inputs. The hurdle rate is a break-even point, not a "
+            "recommended price.",
         ],
     }
 

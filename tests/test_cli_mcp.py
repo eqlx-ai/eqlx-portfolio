@@ -113,6 +113,8 @@ TOOLS = {
     "portfolio_risk",
     "risk_contributions",
     "what_if_new_loans",
+    "price_new_loan",
+    "loan_price",
     "joint_default",
     "joint_migration",
     "exposure_value",
@@ -222,3 +224,45 @@ def test_mcp_edge_values_are_json_safe_and_explained(root):
     (root / "latin.csv").write_bytes(b"loan_id,exposure,pd,lgd,sector\nL1,1000,0.02,0.45,in\xfeaat\n")
     out = call(server, "describe_loans", {"loans": "latin.csv"})
     assert out.is_error and "UTF-8" in out.content[0].text
+
+
+TERMS = {"years": 3, "funding": 0.40, "target_return": 0.45, "capital_return": 0.38, "tax_rate": 0.30, "rate": 0.43}
+
+
+def test_price_command(folder, capsys):
+    loans, settings = folder / "loans.csv", folder / "settings.json"
+    terms = folder / "terms.json"
+    terms.write_text(json.dumps(TERMS))
+    code, out, _ = run(capsys, "price", loans, "--config", settings, "--new", folder / "new.csv", "--terms", terms)
+    d = json.loads(out)
+    assert code == 0 and [v["capital_basis"] for v in d["views"]] == ["portfolio", "basel_formula"]
+    assert d["views"][0]["hurdle_rate"] > 0.40
+    terms.write_text(json.dumps({**TERMS, "mood": 1}))
+    code, _, err = run(capsys, "price", loans, "--config", settings, "--new", folder / "new.csv", "--terms", terms)
+    assert code == 2 and "unknown term" in err
+
+
+def test_mcp_pricing_tools(root):
+    server = build_server(root)
+    new = {"loan_id": "N1", "sector": "construction", "exposure": 30e6, "pd": 0.02, "lgd": 0.45}
+    args = {"loans": "loans.csv", "settings": "settings.json", "new_loan": new, "terms": TERMS}
+    priced = data_of(call(server, "price_new_loan", args))
+    view = priced["views"][0]
+    assert view["capital_basis"] == "portfolio" and view["components"]["funding_cost_rate"] == pytest.approx(0.40)
+    alone = data_of(
+        call(
+            server,
+            "loan_price",
+            {"notional": 30e6, "years": 3, "pd": 0.02, "lgd": 0.45, "capital": view["capital_per_unit_lent"],
+             "target_return": 0.45, "funding": 0.40, "capital_return": 0.38, "tax_rate": 0.30, "rate": 0.43},
+        )
+    )  # fmt: skip
+    assert alone["hurdle_rate"] == pytest.approx(view["hurdle_rate"]) and alone["raroc"] == pytest.approx(view["raroc"])
+    bad = call(server, "price_new_loan", {**args, "terms": {"years": 3}})
+    assert bad.is_error and "terms need" in bad.content[0].text
+    bad = call(
+        server,
+        "loan_price",
+        {"notional": 1, "years": 2.3, "pd": 0.02, "lgd": 0.45, "capital": 0.1, "target_return": 0.2, "funding": 0.1},
+    )
+    assert bad.is_error and "payment periods" in bad.content[0].text

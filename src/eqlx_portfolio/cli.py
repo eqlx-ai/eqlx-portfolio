@@ -1,4 +1,4 @@
-"""Command line: ``eqlx-portfolio run | what-if | contributions | describe | pair | sample | mcp``."""
+"""Command line: ``eqlx-portfolio run | what-if | price | contributions | describe | pair | sample | mcp``."""
 
 from __future__ import annotations
 
@@ -96,6 +96,11 @@ def build_parser() -> argparse.ArgumentParser:
     run_args(s)
     s.add_argument("--new", required=True, help="loan file (CSV) with the loans to add")
 
+    s = sub.add_parser("price", help="what a new loan has to earn: hurdle rate and RAROC")
+    run_args(s)
+    s.add_argument("--new", required=True, help="loan file (CSV) with the one loan to price")
+    s.add_argument("--terms", required=True, help="pricing terms (JSON): years, funding, target_return, ...")
+
     s = sub.add_parser("contributions", help="every borrower's risk contribution as CSV")
     run_args(s)
     s.add_argument("--out", help="write to this file instead of standard output")
@@ -165,6 +170,9 @@ def _dispatch(args: argparse.Namespace) -> int:
         return 0
     if cmd == "what-if":
         _emit(engine.what_if(loans, data.read_csv(args.new), settings))
+        return 0
+    if cmd == "price":
+        _emit(engine.price_new_loan(loans, data.read_csv(args.new), settings, config.read_json(args.terms)))
         return 0
     rows = engine.contributions(loans, settings)
     handle = open(args.out, "w", newline="", encoding="utf-8") if args.out else sys.stdout  # noqa: SIM115
