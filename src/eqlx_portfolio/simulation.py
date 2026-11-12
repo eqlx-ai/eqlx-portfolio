@@ -75,6 +75,7 @@ def simulate(
     seed: int,
     tail_levels: ArrayLike | None = None,
     exclude: NDArray[np.bool_] | None = None,
+    side_factors: int = 0,
     default_loss_rate_sd: ArrayLike | None = None,
     default_loss_rate_mean: ArrayLike | None = None,
 ) -> Simulation:
@@ -88,6 +89,10 @@ def simulate(
     ``tail_levels`` asks for value-at-risk, expected shortfall and each borrower's share of the
     expected shortfall at those confidence levels, treating large totals as bad. The shares are
     the borrower's average outcome over the worst scenarios and add up to the expected shortfall.
+
+    ``exclude`` flags borrowers whose outcome is also left out of a second total
+    (``totals_excluding``), which equals a run of the portfolio without them; ``side_factors``
+    says how many of the last factors drive only those borrowers.
 
     ``default_loss_rate_sd`` makes the outcome in default uncertain: it is scaled by a
     beta-distributed loss rate with mean ``default_loss_rate_mean`` and this standard deviation.
@@ -116,24 +121,29 @@ def simulate(
         if np.any(uncertain & (lgd_mean <= 0.0)):
             raise InputError("lgd_sd needs a positive mean loss rate")
 
-    # Flagged borrowers draw their own shocks from a second stream, and the batch size ignores
-    # them: the totals without them are then identical to a run of the portfolio without them.
+    # Flagged borrowers draw their own shocks from a second stream, the batch size ignores them
+    # and their extra factors come from that second stream too: the totals without them are
+    # then identical to a run of the portfolio without them.
     main = np.ones(n, dtype=np.bool_) if exclude is None else ~exclude
     n_main = int(main.sum())
     if n_main == 0:
         raise InputError("exclude must leave at least one borrower")
     batch = max(1, BATCH_CELLS // n_main)
     k = model.loadings.shape[1]
-    load_t = np.ascontiguousarray(model.loadings.T)
+    if isinstance(side_factors, bool) or not isinstance(side_factors, int) or not 0 <= side_factors < k:
+        raise InputError("side_factors must be a whole number below the number of factors")
+    if side_factors and (exclude is None or np.any(model.loadings[main][:, k - side_factors :] != 0.0)):
+        raise InputError("side factors may only drive excluded borrowers")
+    k_main = k - side_factors
+    load_main = np.ascontiguousarray(model.loadings[main][:, :k_main].T)
+    idio_main = model.idio[main]
     cols = np.arange(n)
-
-    def draw(rng: np.random.Generator, side: np.random.Generator, m: int, normal: bool) -> Array:
-        if exclude is None:
-            return rng.standard_normal((m, n)) if normal else rng.random((m, n))
-        x = np.empty((m, n))
-        x[:, main] = rng.standard_normal((m, n_main)) if normal else rng.random((m, n_main))
-        x[:, exclude] = side.standard_normal((m, n - n_main)) if normal else side.random((m, n - n_main))
-        return x
+    if exclude is not None:
+        load_side = np.ascontiguousarray(model.loadings[exclude].T)
+        idio_side = model.idio[exclude]
+        n_side = n - n_main
+    lgd_main = random_lgd and bool(uncertain[main].any())
+    lgd_side = random_lgd and exclude is not None and bool(uncertain[exclude].any())
 
     def run(cutoffs: list[tuple[float, float]] | None) -> tuple[Array, Array | None, list[Array]]:
         rng = np.random.Generator(np.random.PCG64(seed))
@@ -144,15 +154,25 @@ def simulate(
         done = 0
         while done < scenarios:
             m = min(batch, scenarios - done)
-            f = rng.standard_normal((m, k))
-            e = draw(rng, side, m, True)
-            r = f @ load_t + e * model.idio
+            f = rng.standard_normal((m, k_main))
+            r_main = f @ load_main + rng.standard_normal((m, n_main)) * idio_main
+            if exclude is None:
+                r = r_main
+            else:
+                r = np.empty((m, n))
+                r[:, main] = r_main
+                f_all = np.hstack((f, side.standard_normal((m, side_factors)))) if side_factors else f
+                r[:, exclude] = f_all @ load_side + side.standard_normal((m, n_side)) * idio_side
             state = np.zeros((m, n), dtype=np.intp)
             for j in range(states - 1):
                 state += r < thr[:, j]
             x = out[cols, state]
-            if random_lgd:
-                u = draw(rng, side, m, False)
+            if lgd_main or lgd_side:
+                u = np.full((m, n), 0.5)
+                if lgd_main:
+                    u[:, main] = rng.random((m, n_main))
+                if lgd_side and exclude is not None:
+                    u[:, exclude] = side.random((m, n_side))
                 hit = (state == states - 1) & uncertain
                 if hit.any():
                     rows, cs = np.nonzero(hit)
@@ -219,7 +239,7 @@ class Quantile:
     confidence: float
     value: float
     ci_low: float
-    ci_high: float
+    ci_high: float | None  # None when the simulation has too few scenarios beyond the quantile to bound it
     expected_shortfall: float
 
 
@@ -228,7 +248,8 @@ def quantiles(totals: Array, levels: ArrayLike, ci: float = 0.95) -> list[Quanti
 
     The band comes from order statistics: the number of scenarios below the true quantile is
     binomial, so two sorted scenarios bracket it with probability ``ci`` (Technical Document,
-    appendix B).
+    appendix B). When the upper bracket would lie beyond the largest simulated outcome there is
+    no upper bound and ``ci_high`` is None.
     """
     x = np.sort(totals)
     n = x.size
@@ -242,7 +263,7 @@ def quantiles(totals: Array, levels: ArrayLike, ci: float = 0.95) -> list[Quanti
                 float(q),
                 float(x[idx]),
                 float(x[min(max(lo - 1, 0), n - 1)]),
-                float(x[min(max(hi, 0), n - 1)]),
+                float(x[hi]) if hi <= n - 1 else None,
                 float(x[idx:].mean()),
             )
         )

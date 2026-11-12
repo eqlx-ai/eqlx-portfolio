@@ -1,7 +1,5 @@
 """The numbers printed in the README are real."""
 
-import csv
-import io
 import json
 import re
 from pathlib import Path
@@ -30,7 +28,7 @@ README = (Path(__file__).parent.parent / "README.md").read_text(encoding="utf-8"
 
 def _sample():
     loans_csv, settings_json = synthetic.generate()
-    return data.from_records(csv.DictReader(io.StringIO(loans_csv))), config.from_dict(json.loads(settings_json))
+    return data.from_text(loans_csv), config.from_dict(json.loads(settings_json))
 
 
 def test_command_line_output_shown_in_the_readme():

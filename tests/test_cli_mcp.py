@@ -183,3 +183,42 @@ def test_mcp_reports_input_errors(root):
     assert call(server, "what_if_new_loans", {**args, "new_loans": []}).is_error
     assert call(server, "joint_default", {"pd_a": 0.02, "pd_b": 0.02, "asset_correlation": 2}).is_error
     assert call(server, "large_portfolio_benchmark", {"pd": 0.01, "lgd": 1.5, "asset_correlation": 0.2}).is_error
+
+
+def test_mcp_contributions_filter_before_cutting_and_refuse_bad_arguments(root):
+    server = build_server(root)
+    args = {"loans": "loans.csv", "settings": "settings.json"}
+    described = data_of(call(server, "describe_loans", {"loans": "loans.csv"}))
+    in_sector = next(s["borrowers"] for s in described["concentration"]["by_sector"] if s["sector"] == "retail")
+    res = data_of(call(server, "risk_contributions", {**args, "sector": "retail", "limit": 1000}))
+    assert res["borrowers_matching"] == in_sector == len(res["borrowers"])
+    for bad in ({"limit": 0}, {"limit": -5}, {"limit": 5000}, {"sector": "nosuch"}):
+        out = call(server, "risk_contributions", {**args, **bad})
+        assert out.is_error and out.content[0].text.startswith("Error executing tool risk_contributions: ")
+
+
+def test_mcp_edge_values_are_json_safe_and_explained(root):
+    server = build_server(root)
+    m = data_of(
+        call(server, "joint_migration", {"probs_a": [0.0, 0.9, 0.1], "probs_b": [0.8, 0.2], "asset_correlation": 0.3})
+    )
+    assert m["thresholds_a"][0] is None and m["joint_probabilities"][0] == [0.0, 0.0]
+    j = data_of(call(server, "joint_default", {"pd_a": 0.0, "pd_b": 0.02, "asset_correlation": 0.3}))
+    assert j["joint_default_probability"] == 0.0 and j["default_correlation"] is None
+    for name, arguments in (
+        ("exposure_value", {"probs": [0.5, 0.5], "values": [1e308, -1e308]}),
+        ("describe_loans", {"loans": "a\x00b.csv"}),
+        (
+            "what_if_new_loans",
+            {
+                "loans": "loans.csv",
+                "settings": "settings.json",
+                "new_loans": [{"loan_id": "N", "exposure": 1, "pd": 0.1, "lgd": 0.5, "sektor": "x"}],
+            },
+        ),
+    ):
+        out = call(server, name, arguments)
+        assert out.is_error and out.content[0].text.startswith(f"Error executing tool {name}: "), name
+    (root / "latin.csv").write_bytes(b"loan_id,exposure,pd,lgd,sector\nL1,1000,0.02,0.45,in\xfeaat\n")
+    out = call(server, "describe_loans", {"loans": "latin.csv"})
+    assert out.is_error and "UTF-8" in out.content[0].text

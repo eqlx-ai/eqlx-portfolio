@@ -27,8 +27,13 @@ What the tool does not do, and where its numbers need care.
   numbers themselves are identical everywhere (NumPy PCG64); across machines a result can differ only
   if a rounding difference in the last digit moves an asset return across a default threshold, which
   changes single scenarios, not the picture. NumPy's version is printed in every result.
+- **Row order matters a little.** Each borrower takes its random numbers in file order, so sorting the
+  loan file differently gives another, equally valid, set of scenarios: results move within the band.
+  CreditRisk+ does not depend on row order.
 - **The far tail is thin.** With 100,000 scenarios the 99.9% value-at-risk rests on 100 outcomes. The
-  result prints a 95% band around every simulated value-at-risk; if it is too wide, raise `scenarios`.
+  result prints a 95% band around every simulated value-at-risk and warns when fewer than 100 outcomes
+  lie beyond a level; when too few lie beyond it to bound the value at all, the upper end is empty.
+  Raise `scenarios`.
 - **Risk contributions are noisier than totals.** A borrower's share is its average loss over the
   tail outcomes; small borrowers default in few of them. Use more scenarios, or CreditRisk+, before
   ranking borrowers that are close together.
@@ -41,7 +46,10 @@ What the tool does not do, and where its numbers need care.
   simulation, or one common sector.
 - Defaults are treated as Poisson events, which is accurate for small default probabilities and
   overstates losses a little when they are large (above roughly 10%).
-- Losses are rounded to whole loss units; each borrower's expected loss is kept. The unit is printed.
+- Losses are rounded to whole loss units; each borrower's expected loss is kept. The unit is chosen so
+  that rounding moves the standard deviation by less than half a percent where the size of the
+  calculation allows; the result shows the standard deviation before rounding and warns when the two
+  are more than one percent apart. Amounts are capped at 1e15.
 - It is a different model from the simulation, not a faster copy: given the same default
   probabilities and default correlation the two agree on expected loss and are close on the standard
   deviation, and drift apart in the far tail (gamma versus normal factors).

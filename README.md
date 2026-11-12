@@ -48,11 +48,11 @@ loans 621  borrowers 500  sectors 6  exposure 995,349,000
 expected loss                12,716,172
 loss std deviation           12,031,533
 at 99.00% confidence
-  value-at-risk              57,233,350
+  value-at-risk              57,233,350   95% band 56,635,700 to 57,801,100
   expected shortfall         71,379,023
   economic capital           44,517,178
 at 99.90% confidence
-  value-at-risk              91,343,950
+  value-at-risk              91,343,950   95% band 88,673,050 to 93,627,200
   expected shortfall        104,348,278
   economic capital           78,627,778
 
@@ -80,8 +80,8 @@ B0435                           0.5%        2.0%
 ```
 
 Construction is 41% of the exposure and 69% of the risk: five large borrowers were planted there.
-The same run with `--json` adds the 95% band around each value-at-risk, the checks that were made
-and the steps taken.
+The band next to each value-at-risk says how far simulation noise can move it. The same run with
+`--json` adds the checks that were made and the steps taken.
 
 What does one more loan do? Fifty million to a new construction borrower, then the same loan to an
 energy borrower:
@@ -259,9 +259,11 @@ Independent truth for everything else:
 - CreditRisk+ against the negative binomial and Poisson closed forms (to 14 decimals) and against a
   brute-force simulation of the same model, including every borrower's risk contribution;
 - risk contributions add up to the expected shortfall, in both methods;
-- a what-if run reproduces, to the last digit, the separate run of the portfolio without the new loans.
+- a what-if run reproduces, to the last digit, the separate run of the portfolio without the new
+  loans, also when the new loan brings a new sector or an uncertain loss given default;
+- every defect found by an independent review is pinned by a regression test.
 
-118 tests. `uv run pytest` runs them in about a minute.
+145 tests. `uv run pytest` runs them in about a minute.
 
 ## Limits
 

@@ -9,18 +9,13 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from . import config, data, engine, ratings, synthetic
+from . import config, data, engine, synthetic
 from ._version import __version__
 from .errors import InputError
 
 
 def _settings(path: str, overrides: list[str] | None) -> config.Settings:
-    try:
-        raw = json.loads(Path(path).read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise InputError(f"{path}: not valid JSON ({exc})") from exc
-    if not isinstance(raw, dict):
-        raise InputError(f"{path}: the settings must be a JSON object")
+    raw = config.read_json(path)
     changes: dict[str, Any] = {}
     for item in overrides or []:
         key, sep, value = item.partition("=")
@@ -28,7 +23,7 @@ def _settings(path: str, overrides: list[str] | None) -> config.Settings:
             raise InputError(f"--set expects key=value, got {item!r}")
         try:
             changes[key] = json.loads(value)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, RecursionError):
             changes[key] = value
     return config.from_dict(config.with_overrides(raw, changes) if changes else raw)
 
@@ -52,12 +47,17 @@ def _text(res: dict[str, Any]) -> str:
         f"loss std deviation   {_money(res['loss_sd']):>18}",
     ]
     for lv in res["levels"]:
+        band = lv.get("value_at_risk_95_band")
+        shown = ""
+        if band:
+            shown = f"   95% band {_money(band[0])} to {_money(band[1]) if band[1] is not None else 'unbounded'}"
         lines += [
             f"at {lv['confidence']:.2%} confidence",
-            f"  value-at-risk      {_money(lv['value_at_risk']):>18}",
+            f"  value-at-risk      {_money(lv['value_at_risk']):>18}{shown}",
             f"  expected shortfall {_money(lv['expected_shortfall']):>18}",
             f"  economic capital   {_money(lv['economic_capital']):>18}",
         ]
+    lines += [f"! {step}" for step in res["steps"] if step.startswith(("Warning:", "Note:"))]
     c = res["concentration"]
     lines += [
         "",
@@ -139,17 +139,7 @@ def _dispatch(args: argparse.Namespace) -> int:
         _emit(engine.describe(data.read_csv(args.loans)))
         return 0
     if cmd == "pair":
-        joint = float(ratings.joint_default_probability(args.pd_a, args.pd_b, args.rho)[0])
-        _emit(
-            {
-                "pd_a": args.pd_a,
-                "pd_b": args.pd_b,
-                "asset_correlation": args.rho,
-                "joint_default_probability": joint,
-                "if_independent": args.pd_a * args.pd_b,
-                "default_correlation": float(ratings.default_correlation(args.pd_a, args.pd_b, args.rho)[0]),
-            }
-        )
+        _emit(engine.pair(args.pd_a, args.pd_b, args.rho))
         return 0
     if cmd == "sample":
         if not 10 <= args.borrowers <= 100_000:

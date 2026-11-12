@@ -52,11 +52,15 @@ def _explained(fn: F) -> F:
             raise ToolError(f"file not found: {exc}") from exc
         except InputError as exc:
             raise ToolError(str(exc)) from exc
+        except (IsADirectoryError, PermissionError) as exc:
+            raise ToolError(f"cannot read: {type(exc).__name__}") from exc
 
     return wrapper  # type: ignore[return-value]
 
 
 def _resolve(root: Path, path: str) -> Path:
+    if not isinstance(path, str) or "\x00" in path:
+        raise OutsideRootError("the path is not valid")
     p = (root / path).resolve()
     if p != root and root not in p.parents:
         raise OutsideRootError(f"{path!r} is outside the allowed folder")
@@ -97,12 +101,7 @@ class _Runs:
         p = self.file(path, ".json")
         if p.stat().st_size > MAX_SETTINGS_BYTES:
             raise InputError("the settings file is too large")
-        try:
-            raw = json.loads(p.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise InputError(f"{path}: not valid JSON ({exc})") from exc
-        if not isinstance(raw, dict):
-            raise InputError(f"{path}: the settings must be a JSON object")
+        raw = config.read_json(p)
         return config.with_overrides(raw, overrides) if overrides else raw
 
     def run(self, loans: str, settings: str, overrides: dict[str, Any] | None) -> dict[str, Any]:
@@ -110,7 +109,7 @@ class _Runs:
         raw = self.settings(settings, overrides)
         run_key = (*key, json.dumps(raw, sort_keys=True))
         if run_key not in self.runs:
-            self.runs[run_key] = engine.run(lo, config.from_dict({**raw, "top": 1000}))
+            self.runs[run_key] = engine.run(lo, config.from_dict({**raw, "top": data.MAX_ROWS}))
             while len(self.runs) > CACHE_SIZE:
                 self.runs.popitem(last=False)
         self.runs.move_to_end(run_key)
@@ -187,14 +186,21 @@ def build_server(root: Path, max_rows: int = data.MAX_ROWS) -> MCPServer:
     ) -> dict[str, Any]:
         """Borrowers ranked by their share of portfolio risk (their average loss in the worst outcomes), with
         exposure share next to risk share. A borrower whose risk share is far above its exposure share is
-        where the concentration is. `sector` filters; `limit` is at most 1000."""
+        where the concentration is. `sector` filters; `limit` is 1 to 1000."""
+        if isinstance(limit, bool) or not 1 <= limit <= 1000:
+            raise InputError("limit must be between 1 and 1000")
         res = runs.run(loans, settings, overrides)
-        rows = [r for r in res["top_contributors"] if sector is None or r["sector"] == sector]
+        rows = res["top_contributors"]
+        if sector is not None:
+            known = sorted({r["sector"] for r in rows})
+            if sector not in known:
+                raise InputError(f"no sector {sector!r} in the loan file; sectors: {', '.join(known)}")
+            rows = [r for r in rows if r["sector"] == sector]
         return {
             "confidence": res["contributions_at_confidence"],
             "expected_shortfall": res["levels"][-1]["expected_shortfall"],
-            "borrowers_listed": min(len(rows), max(1, min(limit, 1000))),
-            "borrowers": rows[: max(1, min(limit, 1000))],
+            "borrowers_matching": len(rows),
+            "borrowers": rows[:limit],
         }
 
     @server.tool(annotations=READ_ONLY)
@@ -214,26 +220,27 @@ def build_server(root: Path, max_rows: int = data.MAX_ROWS) -> MCPServer:
 
     @server.tool(annotations=READ_ONLY)
     @_explained
-    def joint_default(pd_a: float, pd_b: float, asset_correlation: float) -> dict[str, float]:
+    def joint_default(pd_a: float, pd_b: float, asset_correlation: float) -> dict[str, float | None]:
         """Probability that two borrowers both default in the period, from their default probabilities and
         the correlation of their asset values; also what it would be if they were independent, and the
-        correlation of the two default events."""
-        joint = float(ratings.joint_default_probability(pd_a, pd_b, asset_correlation)[0])
-        return {
-            "joint_default_probability": joint,
-            "if_independent": pd_a * pd_b,
-            "default_correlation": float(ratings.default_correlation(pd_a, pd_b, asset_correlation)[0]),
-        }
+        correlation of the two default events (null when a default probability is 0 or 1)."""
+        res = engine.pair(pd_a, pd_b, asset_correlation)
+        return {k: res[k] for k in ("joint_default_probability", "if_independent", "default_correlation")}
 
     @server.tool(annotations=READ_ONLY)
     @_explained
     def joint_migration(probs_a: list[float], probs_b: list[float], asset_correlation: float) -> dict[str, Any]:
         """Joint probabilities of the year-end ratings of two borrowers. Each list gives one borrower's
         probabilities of ending in each state, best rating first and default last. Returns each borrower's
-        asset return thresholds and the table of joint probabilities (rows: borrower A)."""
+        asset return thresholds (null where a state has no probability and the threshold is infinite) and the
+        table of joint probabilities (rows: borrower A)."""
+
+        def finite(values: Any) -> list[float | None]:
+            return [float(v) if np.isfinite(v) else None for v in values]
+
         return {
-            "thresholds_a": ratings.migration_thresholds(probs_a).tolist(),
-            "thresholds_b": ratings.migration_thresholds(probs_b).tolist(),
+            "thresholds_a": finite(ratings.migration_thresholds(probs_a)),
+            "thresholds_b": finite(ratings.migration_thresholds(probs_b)),
             "joint_probabilities": ratings.joint_migration(probs_a, probs_b, asset_correlation).tolist(),
         }
 

@@ -1,7 +1,5 @@
 """Portfolio runs: loan file and settings in, a traceable result out."""
 
-import csv
-import io
 import itertools
 import json
 
@@ -12,7 +10,7 @@ from eqlx_portfolio import InputError, config, data, engine, synthetic
 
 
 def _loans(text):
-    return data.from_records(csv.DictReader(io.StringIO(text)))
+    return data.from_text(text)
 
 
 @pytest.fixture(scope="module")
@@ -212,7 +210,16 @@ def test_lgd_sd_column(sample):
         ("loan_id,exposure,pd,lgd\na,1,1.0,0.5\n", "pd must be"),
         ("loan_id,exposure,pd,lgd\na,1,0.1,1.5\n", "lgd must lie"),
         ("loan_id,exposure,pd,lgd\na,x,0.1,0.5\n", "not a number"),
-        ("loan_id,exposure,pd,lgd\na,nan,0.1,0.5\n", "finite"),
+        ("loan_id,exposure,pd,lgd\na,nan,0.1,0.5\n", "not a number"),
+        ("loan_id,exposure,pd,lgd\na,1e400,0.1,0.5\n", "finite"),
+        ("loan_id,exposure,pd,lgd\na,1e300,0.1,0.5\n", "too large"),
+        ("loan_id,exposure,pd,lgd\na,1_000,0.1,0.5\n", "not a number"),
+        ("loan_id,exposure,pd,lgd\na,\uff11\uff10\uff10,0.1,0.5\n", "not a number"),
+        ("loan_id,exposure,pd,lgd\na,1,000,000,0.02,0.45\n", "more fields than the header"),
+        ("loan_id,exposure,pd,lgd,pd\na,1,0.1,0.5,0.2\n", "more than once"),
+        ("loan_id,exposure,pd,lgd,Sector\na,1,0.1,0.5,x\n", "unknown column"),
+        ("loan_id,exposure,pd,lgd\n\n\n\na,1,7,0.5\n", "row 5: pd"),
+        ("loan_id,borrower_id,exposure,pd,lgd\na,,1,0.1,0.5\nb,a,1,0.1,0.5\n", "used as the borrower_id"),
         ("loan_id,exposure,pd,lgd,lgd_sd\na,1,0.1,0.5,0.6\n", "lgd_sd is too large"),
         ("loan_id,exposure,pd,lgd\n", "no loans"),
         ("loan_id,exposure,pd,lgd\na,1,,0.5\n", "row 2: missing pd"),
