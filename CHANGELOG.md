@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.0
+
+- Risk-based loan pricing: cost components (funding, expected loss, operating cost, capital), the
+  hurdle rate at which a loan earns the target return, RAROC and yearly value added at an offered
+  rate, for fixed-rate bullet and equal-principal loans on a funding rate or curve, with a default
+  probability term structure and collateral.
+- `price_new_loan`: the capital a new loan ties up is measured from the portfolio itself (it costs
+  more where the book is already heavy), from the formula behind the Basel risk weights and from a
+  fixed risk weight, and the loan is priced under each.
+- Command `eqlx-portfolio price`; MCP tools `price_new_loan` and `loan_price` (11 tools in all).
+- Checked against the closed form of the scheme it follows (Engelmann and Pham 2020) and hand
+  arithmetic; the article's numerical example is reproduced approximately only (see LIMITS.md).
+
 ## 0.1.0
 
 First release.
@@ -17,7 +30,7 @@ First release.
 - Large-portfolio benchmark (the one-factor formula behind the Basel risk weights).
 - Portfolio runs from a loan file (CSV) and settings (JSON): concentration by borrower and sector,
   top contributors, what-if for new loans on the same scenarios.
-- Command line `eqlx-portfolio` and a read-only MCP server with 9 tools.
+- Command line `eqlx-portfolio` and a read-only MCP server.
 - Checked against the worked examples of the CreditMetrics Technical Document and of the
   CreditRisk+ document, closed forms,
   direct enumeration and brute-force simulation.

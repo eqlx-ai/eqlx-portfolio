@@ -79,8 +79,8 @@ def test_library_example():
 
 
 def test_tool_count_and_test_count_claims():
-    assert README.count("| `") >= 9 + 7  # nine MCP tools and seven input columns are listed
-    assert "9 tools" in (Path(__file__).parent.parent / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert README.count("| `") >= 11 + 7  # eleven MCP tools and seven input columns are listed
+    assert "11 tools" in (Path(__file__).parent.parent / "CHANGELOG.md").read_text(encoding="utf-8")
 
 
 def test_one_version_everywhere():
@@ -102,3 +102,26 @@ def test_creditriskplus_figures_shown_in_the_readme():
     assert f"{1 - res.sd / pub.CRP_SD:.1%}" == "0.4%"
     n_tests = int(re.search(r"(\d+) tests\.", README).group(1))
     assert n_tests > 100
+
+
+def test_pricing_table_shown_in_the_readme():
+    loans, settings = _sample()
+    terms = {"years": 3, "funding": 0.40, "target_return": 0.45, "operating_cost": 0.01, "capital_return": 0.38,
+             "tax_rate": 0.30, "payments_per_year": 4, "rate": 0.43, "risk_weight": 1.0, "capital_ratio": 0.12}  # fmt: skip
+    rows = {}
+    for sector in ("construction", "energy"):
+        new = data.from_records([{"loan_id": "NEW1", "sector": sector, "exposure": 50e6, "pd": 0.02, "lgd": 0.45}])
+        for v in engine.price_new_loan(loans, new, settings, terms)["views"]:
+            rows[(sector, v["capital_basis"])] = v
+
+    def line(label, v):
+        verdict = "yes" if v["meets_target"] else "no"
+        return f"| {label} | {v['capital_per_unit_lent']:.1%} | {v['hurdle_rate']:.2%} | {v['raroc']:.1%} | {verdict} |"
+
+    assert line("to construction, capital from this book", rows[("construction", "portfolio")]) in README
+    assert line("to energy, capital from this book", rows[("energy", "portfolio")]) in README
+    assert line("either, capital from the Basel formula", rows[("energy", "basel_formula")]) in README
+    assert line("either, capital from a 100% risk weight at 12%", rows[("energy", "risk_weight")]) in README
+    c = rows[("energy", "portfolio")]["components"]
+    shown = f"funding cost ({c['funding_cost_rate']:.2%}) + expected loss ({c['expected_loss_margin']:.2%}) + operating cost ({c['operating_cost_margin']:.2%})"
+    assert shown in README.replace("\n", " ")
