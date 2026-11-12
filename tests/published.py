@@ -133,3 +133,58 @@ THREE_ASSET_VALUES = np.array(
         [1.162, 1.161, 1.161, 1.157, 1.142, 1.137, 1.056, 0.551],
     ]
 )
+
+# Source: CreditRisk+ - A Credit Risk Management Framework (Credit Suisse First Boston, 1997), appendix B.
+# Table 8: example portfolio of 25 obligors (exposure net of recovery, credit rating).
+CRP_EXPOSURE = np.array(
+    [
+        358_475, 1_089_819, 1_799_710, 1_933_116, 2_317_327, 2_410_929, 2_652_184, 2_957_685, 3_137_989,
+        3_204_044, 4_727_724, 4_830_517, 4_912_097, 4_928_989, 5_042_312, 5_320_364, 5_435_457, 5_517_586,
+        5_764_596, 5_847_845, 6_466_533, 6_480_322, 7_727_651, 15_410_906, 20_238_895,
+    ],
+    dtype=float,
+)  # fmt: skip
+CRP_RATING = [
+    "H",
+    "H",
+    "F",
+    "G",
+    "G",
+    "G",
+    "H",
+    "G",
+    "D",
+    "D",
+    "A",
+    "D",
+    "D",
+    "H",
+    "F",
+    "E",
+    "D",
+    "C",
+    "E",
+    "C",
+    "H",
+    "H",
+    "B",
+    "F",
+    "E",
+]
+# Table 9: mean default rate by rating; the standard deviation is half the mean for every rating.
+CRP_DEFAULT_RATE = {"A": 0.015, "B": 0.016, "C": 0.03, "D": 0.05, "E": 0.075, "F": 0.10, "G": 0.15, "H": 0.30}
+CRP_RELATIVE_SD = 0.5
+# Example 1A (all obligors in one sector): summary statistics and loss percentiles.
+CRP_AGGREGATE_EXPOSURE = 130_513_072
+CRP_EXPECTED_LOSS = 14_221_863
+CRP_SD = 12_668_742
+CRP_PERCENTILES = {
+    0.50: 11_089_455,
+    0.75: 20_498_062,
+    0.95: 38_908_486,
+    0.975: 46_152_128,
+    0.99: 55_311_503,
+    0.995: 62_033_181,
+    0.9975: 68_612_540,
+    0.999: 77_133_478,
+}

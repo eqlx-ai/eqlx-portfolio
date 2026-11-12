@@ -57,6 +57,10 @@ What the tool does not do, and where its numbers need care.
 
 ## Published examples that do not reproduce
 
+The CreditRisk+ document's 25-obligor example is matched exactly on exposure and expected loss, and
+to within 0.5% on the standard deviation and 0.2% on the tail percentiles: its spreadsheet groups
+exposures into bands by a rounding rule the document does not spell out.
+
 The CreditMetrics Technical Document (1997) is the source of most test values. Three of its figures
 cannot be reproduced from its own tables, and the test-suite pins down why instead of matching them:
 

@@ -14,7 +14,7 @@ inputs. Same input, same output, and every figure comes with the steps that prod
 - **Two methods, one input.** A seeded simulation of the asset value model (the approach of
   CreditMetrics) and the closed-form CreditRisk+ model. Use one to question the other.
 - **Checked against published numbers.** The worked examples of the CreditMetrics Technical
-  Document are reproduced in the test-suite; everything else is checked against closed forms, direct
+  Document and of the CreditRisk+ document are reproduced in the test-suite; everything else is checked against closed forms, direct
   enumeration and brute-force simulation.
 - **Built for agents.** The agent decides what to look at; the tool returns the number, the band
   around it and the steps taken. The MCP server only reads files in one folder and writes nothing.
@@ -234,7 +234,20 @@ Published figures, from the CreditMetrics Technical Document (J.P. Morgan, 1997)
 | First percentile of a two-bond portfolio | 204.40 | 204.40 |
 | Three-bond portfolio: means and variances (chapter 9) | 7 values | all 7 |
 
-Three printed figures do not follow from the document's own tables (a misprinted probability, a
+Published figures, from the CreditRisk+ document (Credit Suisse First Boston, 1997), example 1A,
+25 obligors in one sector:
+
+| Figure | Published | Reproduced |
+|---|---|---|
+| Aggregate exposure, expected loss | 130,513,072 and 14,221,863 | the same |
+| Standard deviation | 12,668,742 | 12,613,315 (0.4% lower) |
+| 99th percentile loss | 55,311,503 | 55,240,000 (0.1% lower) |
+| 99.9th percentile loss | 77,133,478 | 76,990,000 (0.2% lower) |
+
+The document's spreadsheet groups exposures into bands by a rounding rule it does not spell out;
+the small gaps are that rounding.
+
+Three figures printed in the CreditMetrics document do not follow from its own tables (a misprinted probability, a
 misprinted threshold, and covariances that the model cannot produce). The tests show where each
 comes from; see [LIMITS.md](LIMITS.md).
 
@@ -248,7 +261,7 @@ Independent truth for everything else:
 - risk contributions add up to the expected shortfall, in both methods;
 - a what-if run reproduces, to the last digit, the separate run of the portfolio without the new loans.
 
-116 tests. `uv run pytest` runs them in about a minute.
+118 tests. `uv run pytest` runs them in about a minute.
 
 ## Limits
 

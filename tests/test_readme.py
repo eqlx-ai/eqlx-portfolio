@@ -91,3 +91,16 @@ def test_one_version_everywhere():
     pyproject = (Path(__file__).parent.parent / "pyproject.toml").read_text(encoding="utf-8")
     assert f'version = "{eqlx_portfolio.__version__}"' in pyproject
     assert f"## {eqlx_portfolio.__version__}" in (Path(__file__).parent.parent / "CHANGELOG.md").read_text()
+
+
+def test_creditriskplus_figures_shown_in_the_readme():
+    from . import published as pub
+
+    pd = np.array([pub.CRP_DEFAULT_RATE[r] for r in pub.CRP_RATING])
+    res = creditriskplus(pub.CRP_EXPOSURE, pd, np.ones((25, 1)), [0.5], loss_unit=10_000, confidence=[0.99, 0.999])
+    shown = (f"{res.sd:,.0f}", f"{res.tails[0].value_at_risk:,.0f}", f"{res.tails[1].value_at_risk:,.0f}")
+    assert shown == ("12,613,315", "55,240,000", "76,990,000")
+    assert all(x in README for x in shown)
+    assert f"{1 - res.sd / pub.CRP_SD:.1%}" == "0.4%"
+    n_tests = int(re.search(r"(\d+) tests\.", README).group(1))
+    assert n_tests > 100
