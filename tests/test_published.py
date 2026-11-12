@@ -153,3 +153,26 @@ def test_three_asset_covariances_are_checked_by_simulation_not_by_the_document()
     assert sim.totals.mean() == pytest.approx(res.mean, abs=0.001)
     assert sim.totals.std() == pytest.approx(res.sd, rel=0.01)
     assert np.all(res.marginal_sds > 0) and res.marginal_sds.sum() < res.sd
+
+
+def test_creditriskplus_example_1a():
+    """The 25-obligor example of the CreditRisk+ document, all obligors in one sector.
+
+    Exposure and expected loss match to the unit. The document's spreadsheet groups exposures into
+    bands by a rounding rule it does not spell out, so the standard deviation and the percentiles
+    are matched to within that rounding: half a percent, and a fifth of a percent in the tail.
+    """
+    from eqlx_portfolio import creditriskplus
+
+    pd = np.array([pub.CRP_DEFAULT_RATE[r] for r in pub.CRP_RATING])
+    levels = list(pub.CRP_PERCENTILES)
+    res = creditriskplus(
+        pub.CRP_EXPOSURE, pd, np.ones((25, 1)), [pub.CRP_RELATIVE_SD], loss_unit=10_000, confidence=levels
+    )
+    assert round(float(pub.CRP_EXPOSURE.sum())) == pub.CRP_AGGREGATE_EXPOSURE
+    assert round(res.expected_loss) == pub.CRP_EXPECTED_LOSS
+    assert res.sd == pytest.approx(pub.CRP_SD, rel=0.005)
+    ours = {t.confidence: t.value_at_risk for t in res.tails}
+    for level, printed in pub.CRP_PERCENTILES.items():
+        tolerance = 0.002 if level >= 0.95 else 0.02
+        assert ours[level] == pytest.approx(printed, rel=tolerance), level

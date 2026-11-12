@@ -18,5 +18,6 @@ First release.
 - Portfolio runs from a loan file (CSV) and settings (JSON): concentration by borrower and sector,
   top contributors, what-if for new loans on the same scenarios.
 - Command line `eqlx-portfolio` and a read-only MCP server with 9 tools.
-- Checked against the worked examples of the CreditMetrics Technical Document, closed forms,
+- Checked against the worked examples of the CreditMetrics Technical Document and of the
+  CreditRisk+ document, closed forms,
   direct enumeration and brute-force simulation.

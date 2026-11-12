@@ -71,9 +71,14 @@ def _unknown(where: str, raw: Mapping[str, Any], allowed: set[str]) -> None:
 
 
 def _real(name: str, value: Any, low: float, high: float, *, open_low: bool = False, open_high: bool = False) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not np.isfinite(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise InputError(f"{name} must be a number")
-    v = float(value)
+    try:
+        v = float(value)
+    except OverflowError:
+        raise InputError(f"{name} is outside its allowed range") from None
+    if not np.isfinite(v):
+        raise InputError(f"{name} must be a number")
     if v < low or v > high or (open_low and v == low) or (open_high and v == high):
         raise InputError(f"{name} is outside its allowed range")
     return v
@@ -89,6 +94,23 @@ def _mapping(name: str, value: Any) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise InputError(f"{name} must be an object")
     return value
+
+
+def read_json(path: Any) -> dict[str, Any]:
+    """A settings file: UTF-8 JSON holding one object."""
+    import json
+    from pathlib import Path
+
+    name = Path(path).name
+    try:
+        raw = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    except UnicodeDecodeError:
+        raise InputError(f"{name}: not a UTF-8 text file") from None
+    except (json.JSONDecodeError, RecursionError) as exc:
+        raise InputError(f"{name}: not valid JSON ({exc})") from None
+    if not isinstance(raw, dict):
+        raise InputError(f"{name}: the settings must be a JSON object")
+    return raw
 
 
 def from_dict(raw: Mapping[str, Any]) -> Settings:
@@ -180,7 +202,7 @@ def from_dict(raw: Mapping[str, Any]) -> Settings:
         loss_unit=loss_unit,
         sector_sigma=sigma,
         default_sigma=default_sigma,
-        top=_whole("top", raw.get("top", 10), 0, 1000),
+        top=_whole("top", raw.get("top", 10), 0, 2_000_000),
     )
 
 

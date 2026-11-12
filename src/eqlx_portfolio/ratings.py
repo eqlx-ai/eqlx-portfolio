@@ -22,8 +22,10 @@ from .errors import InputError
 
 def _cuts(probs: Array) -> Array:
     """Band edges in ascending order of asset return: edge j is below the j worst states."""
-    from_worst = np.cumsum(probs[::-1])
-    from_worst[-1] = 1.0
+    # Rounding can push a partial sum a hair above one; the inverse normal of that is not a number.
+    from_worst = np.minimum(np.cumsum(probs[::-1]), 1.0)
+    # Everything from the best state that can actually occur upwards is certain: exactly one.
+    from_worst[int(np.flatnonzero(probs[::-1] > 0.0)[-1]) :] = 1.0
     with np.errstate(divide="ignore"):
         inner: Array = ndtri(from_worst[:-1])
     return np.concatenate(([-np.inf], inner, [np.inf]))

@@ -8,12 +8,13 @@ from numpy.typing import ArrayLike, NDArray
 from .errors import InputError
 
 Array = NDArray[np.float64]
+MAX_MAGNITUDE = 1e15  # amounts beyond this lose whole units in double precision and overflow in squares
 
 
 def as_array(name: str, values: ArrayLike, ndim: int) -> Array:
     try:
         a = np.asarray(values, dtype=np.float64)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise InputError(f"{name} must be numeric") from exc
     if ndim == 1 and a.ndim == 0:
         a = a.reshape(1)
@@ -23,6 +24,8 @@ def as_array(name: str, values: ArrayLike, ndim: int) -> Array:
         raise InputError(f"{name} is empty")
     if not np.all(np.isfinite(a)):
         raise InputError(f"{name} contains NaN or infinite values")
+    if np.any(np.abs(a) > MAX_MAGNITUDE):
+        raise InputError(f"{name} contains values beyond {MAX_MAGNITUDE:g}")
     return a
 
 
@@ -67,7 +70,7 @@ def probability_row(name: str, values: ArrayLike, tol: float = 1e-3) -> Array:
 def correlation(name: str, rho: float) -> float:
     try:
         r = float(rho)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise InputError(f"{name} must be a number") from exc
     if not np.isfinite(r) or r < -1.0 or r > 1.0:
         raise InputError(f"{name} must lie in [-1, 1]")

@@ -6,12 +6,13 @@ The result is a plain dictionary so that it can be printed, saved or handed to a
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 
-from . import config, crplus, data, factors, simulation, vasicek
+from . import config, crplus, data, factors, ratings, simulation, vasicek
 from ._checks import Array
 from ._version import __version__
 from .errors import InputError
@@ -56,9 +57,11 @@ def _factor_model(b: data.Borrowers, s: config.Settings) -> tuple[factors.Factor
     return factors.sector_factors(b.sector, within, between), None, text
 
 
-def _simulate(b: data.Borrowers, s: config.Settings, exclude: Any = None) -> _Run:
+def _simulate(b: data.Borrowers, s: config.Settings, exclude: Any = None, side_factors: int = 0) -> _Run:
     model, rho, text = _factor_model(b, s)
     n = len(b)
+    if side_factors and np.any(model.loadings[~exclude][:, model.loadings.shape[1] - side_factors :] != 0.0):
+        side_factors = 0  # perfectly correlated sectors: the new sector's factor cannot be separated
     outcomes = np.column_stack((np.zeros(n), b.amount))
     sim = simulation.simulate(
         model,
@@ -68,6 +71,7 @@ def _simulate(b: data.Borrowers, s: config.Settings, exclude: Any = None) -> _Ru
         seed=s.seed,
         tail_levels=list(s.confidence),
         exclude=exclude,
+        side_factors=side_factors,
         default_loss_rate_sd=b.lgd_sd,
         default_loss_rate_mean=b.lgd if b.lgd_sd is not None else None,
     )
@@ -110,6 +114,18 @@ def _simulate(b: data.Borrowers, s: config.Settings, exclude: Any = None) -> _Ru
             "Computed the large-portfolio benchmark: the loss a perfectly fine-grained portfolio with the same "
             "pd, lgd and correlation would show (the formula behind the Basel risk weights)."
         )
+    for q in qs:
+        beyond = s.scenarios - simulation.order_index(s.scenarios, q.confidence)
+        if q.ci_high is None:
+            steps.append(
+                f"Warning: {s.scenarios} scenarios leave only {beyond} outcome(s) at or beyond the "
+                f"{q.confidence * 100:g}% level; the value-at-risk there has no upper bound. Raise scenarios."
+            )
+        elif beyond < 100:
+            steps.append(
+                f"Note: the {q.confidence * 100:g}% level rests on {beyond} outcomes; expect a wide band and noisy "
+                "risk contributions. Raise scenarios for a firmer figure."
+            )
     without = None
     if sim.totals_excluding is not None:
         w = sim.totals_excluding
@@ -171,8 +187,14 @@ def _creditriskplus(b: data.Borrowers, s: config.Settings) -> _Run:
         f"Expanded the loss distribution to {res.probabilities.size - 1} loss units; probability left beyond that: "
         f"{res.tail_mass:.1e}.",
     ]
+    if abs(res.sd / res.sd_before_rounding - 1.0) > 2 * crplus.ROUNDING_TOLERANCE:
+        steps.append(
+            f"Warning: rounding to loss units moved the standard deviation by "
+            f"{res.sd / res.sd_before_rounding - 1.0:+.1%}; set a smaller creditriskplus.loss_unit."
+        )
     extra = {
         "expected_loss_exact": float(b.amount @ b.pd),
+        "loss_sd_before_rounding": res.sd_before_rounding,
         "loss_unit": res.loss_unit,
         "loss_units_computed": int(res.probabilities.size - 1),
         "probability_beyond_last_unit": res.tail_mass,
@@ -216,9 +238,13 @@ def _concentration(b: data.Borrowers, contributions: Array) -> dict[str, Any]:
     }
 
 
-def _borrower_rows(b: data.Borrowers, contributions: Array, top: int) -> list[dict[str, Any]]:
+def _borrower_rows(b: data.Borrowers, contributions: Array, top: int, only: Any = None) -> list[dict[str, Any]]:
+    """Borrowers by risk contribution, largest first. ``only`` keeps the flagged borrowers; shares stay
+    shares of the whole portfolio."""
     risk = _shares(contributions)
-    order = np.lexsort((np.arange(len(b)), -contributions))[:top]
+    order = np.lexsort((np.arange(len(b)), -contributions))
+    if only is not None:
+        order = order[only[order]]
     return [
         {
             "borrower_id": b.borrower_id[i],
@@ -232,7 +258,7 @@ def _borrower_rows(b: data.Borrowers, contributions: Array, top: int) -> list[di
             "risk_share": float(risk[i]),
             "exposure_share": float(b.exposure[i] / b.exposure.sum()),
         }
-        for i in order
+        for i in order[:top]
     ]
 
 
@@ -288,10 +314,23 @@ def _result(loans: data.Loans, b: data.Borrowers, s: config.Settings, run: _Run)
     }
 
 
-def _compute(b: data.Borrowers, s: config.Settings, exclude: Any = None) -> _Run:
+def _compute(b: data.Borrowers, s: config.Settings, exclude: Any = None, side_factors: int = 0) -> _Run:
     if s.method == "creditriskplus":
         return _creditriskplus(b, s)
-    return _simulate(b, s, exclude)
+    return _simulate(b, s, exclude, side_factors)
+
+
+def _for_sectors(s: config.Settings, sector_names: tuple[str, ...]) -> config.Settings:
+    """The same settings without entries for sectors that are not in this book."""
+    c = s.correlation
+    keep = set(sector_names)
+    corr = dataclasses.replace(
+        c,
+        within={k: v for k, v in c.within.items() if k in keep},
+        between={k: v for k, v in c.between.items() if k[0] in keep and k[1] in keep},
+    )
+    sigma = {k: v for k, v in s.sector_sigma.items() if k in keep or c.model == "single"}
+    return dataclasses.replace(s, correlation=corr, sector_sigma=sigma)
 
 
 def run(loans: data.Loans, settings: config.Settings) -> dict[str, Any]:
@@ -337,18 +376,22 @@ def what_if(loans: data.Loans, new_loans: data.Loans, settings: config.Settings)
     if again:
         raise InputError(f"borrower {again[0]!r} is already in the portfolio; what-if supports new borrowers only")
     merged = _merge(loans, new_loans)
-    b = data.group(merged)
     old = data.group(loans)
+    # Sectors of the existing book keep their numbers, new sectors follow: the existing borrowers
+    # then see exactly the factors and random numbers of a run without the new loans.
+    b = data.group(merged, sector_order=old.sector_names)
     new_names = set(new_loans.borrower_id)
     flag = np.array([name in new_names for name in b.borrower_id])
+    before_settings = _for_sectors(settings, old.sector_names)
     if settings.method == "simulation":
-        after = _compute(b, settings, flag)
+        side = len(b.sector_names) - len(old.sector_names) if settings.correlation.model == "sector" else 0
+        after = _compute(b, settings, flag, side)
         assert after.without is not None
         before_el = float(old.amount @ old.pd)
         before_levels = [(v, es) for _, v, es in after.without]
     else:
         after = _compute(b, settings)
-        before = _compute(old, settings)
+        before = _compute(old, before_settings)
         before_el = before.expected_loss
         before_levels = [(lv.value_at_risk, lv.expected_shortfall) for lv in before.levels]
     rows = []
@@ -387,12 +430,28 @@ def what_if(loans: data.Loans, new_loans: data.Loans, settings: config.Settings)
         "capital_per_unit_of_new_exposure": rows[-1]["expected_shortfall_change"] / new_exposure,
         "herfindahl_index_before": hhi_before,
         "herfindahl_index_after": hhi_after,
-        "new_borrowers": _borrower_rows(b, np.where(flag, top.contributions, -1.0), int(flag.sum())),
+        "new_borrowers": _borrower_rows(b, top.contributions, int(flag.sum()), only=flag),
         "conventions": [
             *CONVENTIONS,
             "capital_per_unit_of_new_exposure is the change in expected shortfall at the highest confidence level "
             "divided by the new exposure.",
         ],
+    }
+
+
+def pair(pd_a: float, pd_b: float, asset_correlation: float) -> dict[str, Any]:
+    """Joint default probability of two borrowers; the default correlation is None when a pd is 0 or 1."""
+    joint = float(ratings.joint_default_probability(pd_a, pd_b, asset_correlation)[0])
+    defined = 0.0 < pd_a < 1.0 and 0.0 < pd_b < 1.0
+    return {
+        "pd_a": pd_a,
+        "pd_b": pd_b,
+        "asset_correlation": asset_correlation,
+        "joint_default_probability": joint,
+        "if_independent": pd_a * pd_b,
+        "default_correlation": float(ratings.default_correlation(pd_a, pd_b, asset_correlation)[0])
+        if defined
+        else None,
     }
 
 

@@ -18,6 +18,7 @@ shortfall is its expected loss in the worst outcomes, computed from the same exp
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -28,6 +29,7 @@ from .ratings import joint_default_probability
 
 MAX_UNITS = 60_000  # the expansion costs time in proportion to the square of this
 DEFAULT_UNITS = 20_000
+ROUNDING_TOLERANCE = 0.005  # how far rounding to loss units may move the standard deviation
 _RESCALE_AT = 1e200
 
 
@@ -44,7 +46,8 @@ class CreditRiskPlus:
     loss_unit: float
     probabilities: Array  # probabilities[n] = P(loss = n * loss_unit)
     expected_loss: float
-    sd: float
+    sd: float  # of the distribution as computed, after rounding to loss units
+    sd_before_rounding: float  # closed form on the amounts as given
     tail_mass: float  # probability beyond the last term kept
     units: Array  # each borrower's loss given default in loss units
     adjusted_pd: Array  # default probability after rounding, chosen to keep the expected loss
@@ -124,8 +127,10 @@ def creditriskplus(
 
     Amounts are rounded to whole multiples of ``loss_unit`` (at least one) and the default
     probability is adjusted so that each borrower's expected loss is unchanged. The default
-    unit is the largest amount divided by 200, or larger when that would need more than about
-    20,000 units to cover the distribution.
+    unit starts at the largest amount divided by 200 (larger when that would need more than
+    about 20,000 units) and is halved until rounding moves the standard deviation by less than
+    half a percent, as far as the size of the expansion allows. ``sd_before_rounding`` lets you
+    see what rounding did.
     """
     p = in_unit_interval("pd", as_array("pd", pd, 1))
     n = p.size
@@ -142,30 +147,57 @@ def creditriskplus(
         raise InputError("amount must be positive for every borrower (drop borrowers with nothing at risk)")
     levels = None if confidence is None else confidence_levels(confidence)
 
+    exact_sd = float(np.sqrt(float(p @ (a * a)) + float((sig * sig) @ ((w * (p * a)[:, None]).sum(axis=0) ** 2))))
+    largest = float(a.max())
+
+    def banded(u: float) -> tuple[Any, Array, float, float, int]:
+        """Loss units, adjusted pd, mean and sd in units, and the number of units the expansion needs."""
+        units = np.maximum(1, np.rint(a / u)).astype(np.intp)
+        adjusted = p * a / (units * u)
+        mean = float(adjusted @ units)
+        var = float(adjusted @ (units * units).astype(np.float64))
+        sector_el = (w * (adjusted * units)[:, None]).sum(axis=0)
+        sd = float(np.sqrt(var + float((sig * sig) @ (sector_el * sector_el))))
+        return units, adjusted, mean, sd, int(np.ceil(mean + 12.0 * sd)) + int(units.max())
+
     if loss_unit is None:
-        # Fine enough to tell the large loans apart, coarse enough to keep the expansion short.
-        rough_var = float(p @ (a * a)) + float((sig * sig) @ ((w * (p * a)[:, None]).sum(axis=0) ** 2))
-        unit = max(float(a.max()) / 200.0, (float(p @ a) + 12.0 * float(np.sqrt(rough_var))) / DEFAULT_UNITS)
-        unit = min(unit, float(a.max()))
+        # Fine enough to tell the large loans apart, coarse enough to keep the expansion short;
+        # then halved until rounding no longer distorts the spread of losses (many loans far
+        # smaller than the unit would otherwise be lumped into one unit each).
+        unit = max(largest / 200.0, (float(p @ a) + 12.0 * exact_sd) / DEFAULT_UNITS)
+        unit = min(unit, largest)
+        for _ in range(60):
+            _, trial_pd, _, trial_sd, _ = banded(unit)
+            if np.all(trial_pd <= 1.0) and abs(trial_sd * unit / exact_sd - 1.0) <= ROUNDING_TOLERANCE:
+                break
+            if banded(unit / 2.0)[4] > 2 * DEFAULT_UNITS:
+                break
+            unit /= 2.0
     else:
-        unit = float(loss_unit)
-    if not np.isfinite(unit) or unit <= 0.0:
-        raise InputError("loss_unit must be positive")
-    if unit > float(a.max()):
-        raise InputError("loss_unit is larger than the largest loss given default")
-    nu = np.maximum(1, np.rint(a / unit)).astype(np.intp)
-    p_adj = p * a / (nu * unit)
+        try:
+            unit = float(loss_unit)
+        except (TypeError, ValueError, OverflowError):
+            raise InputError("loss_unit must be a positive number") from None
+        if not np.isfinite(unit) or unit <= 0.0:
+            raise InputError("loss_unit must be positive")
+        if unit > largest:
+            raise InputError("loss_unit is larger than the largest loss given default")
+        if largest / unit > MAX_UNITS:
+            raise InputError(f"loss_unit is too small: the largest loss would take more than {MAX_UNITS} units")
+    nu, p_adj, mean_units, sd_units, needed = banded(unit)
     if np.any(p_adj > 1.0):
-        raise InputError("loss_unit is too large: rounding pushes a default probability above 1")
+        raise InputError(
+            "rounding to loss units pushes a default probability above 1; set a smaller loss_unit"
+            if loss_unit is None
+            else "loss_unit is too large: rounding pushes a default probability above 1"
+        )
+    if needed > MAX_UNITS:
+        raise InputError(
+            f"the loss distribution needs {needed} loss units, more than the {MAX_UNITS} allowed; "
+            "use a larger loss_unit"
+        )
     top = int(nu.max())
     w0 = np.clip(1.0 - w.sum(axis=1), 0.0, 1.0)
-
-    # Mean and variance are known in closed form; they size the expansion.
-    mean_units = float(p_adj @ nu)
-    var_units = float(p_adj @ (nu * nu).astype(np.float64))
-    sector_el = (w * (p_adj * nu)[:, None]).sum(axis=0)
-    var_units += float((sig * sig) @ (sector_el * sector_el))
-    sd_units = float(np.sqrt(var_units))
 
     def poly(weights: Array) -> Array:
         out = np.zeros(top + 1)
@@ -183,7 +215,7 @@ def creditriskplus(
     mus = {k: float(polys[k].sum()) for k in active}
     var_k = {k: float(sig[k] ** 2) for k in active}
 
-    n_max = int(min(MAX_UNITS, np.ceil(mean_units + 12.0 * sd_units) + top))
+    n_max = needed
     while True:
         e = np.zeros(n_max + 1)
         e[: top + 1] += a0
@@ -231,5 +263,5 @@ def creditriskplus(
             tails.append(TailShare(float(q), v * unit, float(contrib.sum()) * unit, contrib * unit))
 
     return CreditRiskPlus(
-        unit, probs, mean_units * unit, sd_units * unit, tail, nu.astype(np.float64), p_adj, tuple(tails)
+        unit, probs, mean_units * unit, sd_units * unit, exact_sd, tail, nu.astype(np.float64), p_adj, tuple(tails)
     )
